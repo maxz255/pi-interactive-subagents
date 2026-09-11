@@ -30,7 +30,14 @@ import {
   summarizeSessionStats,
 } from "../pi-extension/subagents/session.ts";
 
-import { shellEscape } from "../pi-extension/subagents/tmux.ts";
+import {
+  shellEscape,
+  canSplitZellijPane,
+  predictZellijSplitDirection,
+  selectZellijPlacement,
+  selectZellijStackPlacement,
+  __muxTest__,
+} from "../pi-extension/subagents/mux.ts";
 import {
   advanceStatusState,
   capStatusLines,
@@ -56,7 +63,7 @@ import {
   runningChildrenCount,
 } from "../pi-extension/subagents/subagent-done.ts";
 import subagentDoneExtension from "../pi-extension/subagents/subagent-done.ts";
-import { __pollForExitTest__ } from "../pi-extension/subagents/tmux.ts";
+import { __pollForExitTest__ } from "../pi-extension/subagents/mux.ts";
 
 // --- Helpers ---
 
@@ -1741,7 +1748,7 @@ describe("subagent-done.ts", () => {
   });
 });
 
-describe("tmux.ts interpretExitSidecar", () => {
+describe("mux.ts interpretExitSidecar", () => {
   const { interpretExitSidecar } = __pollForExitTest__;
 
   it("no longer decodes ping payloads (ask_question keeps the session open instead)", () => {
@@ -2652,7 +2659,106 @@ describe("subagent display helpers", () => {
   });
 });
 
-describe("tmux.ts", () => {
+describe("mux.ts", () => {
+  describe("zellij pane targeting", () => {
+    it("adds --pane-id only to pane-scoped actions", () => {
+      assert.deepEqual(__muxTest__.zellijActionArgs(["write-chars", "hello"], "pane:7"), [
+        "action",
+        "write-chars",
+        "--pane-id",
+        "7",
+        "hello",
+      ]);
+      assert.deepEqual(__muxTest__.zellijActionArgs(["new-pane", "--name", "worker"], "pane:7"), [
+        "action",
+        "new-pane",
+        "--name",
+        "worker",
+      ]);
+      assert.deepEqual(
+        __muxTest__.zellijActionArgs(["close-pane", "--pane-id", "8"], "pane:7"),
+        ["action", "close-pane", "--pane-id", "8"],
+      );
+    });
+  });
+
+  describe("zellij placement", () => {
+    const pane = (overrides: Record<string, unknown>) => ({
+      id: 1,
+      is_plugin: false,
+      is_floating: false,
+      is_selectable: true,
+      exited: false,
+      pane_rows: 20,
+      pane_columns: 80,
+      tab_id: 1,
+      ...overrides,
+    });
+
+    it("matches zellij direction and minimum split rules", () => {
+      assert.equal(predictZellijSplitDirection(pane({ pane_rows: 5, pane_columns: 11 })), "right");
+      assert.equal(predictZellijSplitDirection(pane({ pane_rows: 11, pane_columns: 5 })), "down");
+      assert.equal(predictZellijSplitDirection(pane({ pane_rows: 5, pane_columns: 10 })), null);
+      assert.equal(canSplitZellijPane(pane({ pane_rows: 30, pane_columns: 100 }), 80, 20), false);
+      assert.equal(canSplitZellijPane(pane({ pane_rows: 45, pane_columns: 100 }), 80, 20), true);
+      assert.equal(canSplitZellijPane(pane({ pane_rows: 30, pane_columns: 170 }), 80, 20), true);
+    });
+
+    it("splits only when every candidate remains usable", () => {
+      assert.deepEqual(
+        selectZellijPlacement(
+          [
+            pane({ id: 10, tab_id: 1, pane_rows: 40, pane_columns: 120 }),
+            pane({ id: 11, tab_id: 1, pane_rows: 120, pane_columns: 100 }),
+            pane({ id: 12, tab_id: 2, pane_rows: 60, pane_columns: 200 }),
+          ],
+          10,
+        ),
+        {
+          mode: "split",
+          anchorPaneId: 11,
+          targetPaneId: 11,
+          tabId: 1,
+          splitDirection: "down",
+        },
+      );
+    });
+
+    it("stacks on the largest usable non-parent pane when splitting is unsafe", () => {
+      assert.deepEqual(
+        selectZellijPlacement(
+          [
+            pane({ id: 10, tab_id: 1, pane_rows: 100, pane_columns: 47 }),
+            pane({ id: 11, tab_id: 1, pane_rows: 31, pane_columns: 77 }),
+          ],
+          10,
+          50,
+          10,
+        ),
+        { mode: "stack", anchorPaneId: 11, targetPaneId: 11, tabId: 1 },
+      );
+      assert.equal(
+        selectZellijStackPlacement(
+          [pane({ id: 10, tab_id: 1, pane_rows: 60, pane_columns: 200 })],
+          10,
+        ),
+        null,
+      );
+    });
+
+    it("ignores unusable and other-tab panes", () => {
+      const panes = [
+        pane({ id: 10, tab_id: 1, pane_rows: 5, pane_columns: 10 }),
+        pane({ id: 11, tab_id: 1, pane_rows: 60, pane_columns: 200, is_floating: true }),
+        pane({ id: 12, tab_id: 1, pane_rows: 60, pane_columns: 200, is_plugin: true }),
+        pane({ id: 13, tab_id: 1, pane_rows: 60, pane_columns: 200, exited: true }),
+        pane({ id: 14, tab_id: 2, pane_rows: 60, pane_columns: 200 }),
+      ];
+      assert.equal(selectZellijPlacement(panes, 10), null);
+      assert.equal(selectZellijPlacement([pane({ id: 10 })], 99), null);
+    });
+  });
+
   describe("shellEscape", () => {
     it("wraps in single quotes", () => {
       assert.equal(shellEscape("hello"), "'hello'");

@@ -1,18 +1,17 @@
 /**
- * Integration tests for the tmux surface layer.
+ * Integration tests for the tmux/zellij surface layer.
  *
- * These tests exercise real tmux operations: creating panes,
- * sending commands, reading screen output, and closing panes.
- * No LLM calls — fast and free.
- *
- * Run inside tmux:
+ * Run inside a supported multiplexer:
  *   tmux new 'npm run test:integration'
+ *   zellij --session pi  # then run: npm run test:integration
  */
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { unlinkSync } from "node:fs";
 import {
   getAvailableBackends,
+  setBackend,
+  restoreBackend,
   createTestEnv,
   cleanupTestEnv,
   createTrackedSurface,
@@ -38,23 +37,30 @@ const backends = getAvailableBackends();
 const FOCUS_TEST_SHELL_READY_DELAY_MS = Number(process.env.PI_SUBAGENT_SHELL_READY_DELAY_MS ?? "2500");
 
 if (backends.length === 0) {
-  console.log("⚠️  tmux is not available — skipping tmux-surface integration tests");
-  console.log("   Run inside tmux to enable these tests.");
+  console.log("No supported mux is available - skipping surface integration tests");
+  console.log("Run inside tmux or zellij to enable these tests.");
 }
 
 for (const backend of backends) {
-  describe(`tmux-surface [${backend}]`, { timeout: 60_000 }, () => {
+  describe(`mux-surface [${backend}]`, { timeout: 60_000 }, () => {
     let env: TestEnv;
+    let previousMux: string | undefined;
 
     before(() => {
+      previousMux = setBackend(backend);
       env = createTestEnv();
     });
 
     after(() => {
       cleanupTestEnv(env);
+      restoreBackend(previousMux);
     });
 
-    it("keeps focus on the active surface while creating and targeting subagent surfaces", async () => {
+    it("keeps focus on the active surface while creating and targeting subagent surfaces", async (context) => {
+      if (backend === "zellij") {
+        context.skip("zellij does not expose a reliable cross-pane focus query");
+        return;
+      }
       const anchor = createTrackedSurfaceSplit(env, "focus-anchor", "right");
       await sleep(1000);
 
@@ -180,7 +186,7 @@ for (const backend of backends) {
       await sleep(1000);
 
       const marker = uniqueId();
-      const filePath = `/tmp/pi-tmux-test-${marker}.txt`;
+      const filePath = `/tmp/pi-mux-test-${marker}.txt`;
 
       sendCommand(surface, `echo "FILE_${marker}" > ${filePath} && echo "WRITTEN_${marker}"`);
 

@@ -2,9 +2,9 @@
  * Integration test harness for pi-interactive-subagents.
  *
  * Provides utilities to:
- * - Detect whether tmux is available
+ * - Detect whether tmux or zellij is available
  * - Create isolated test environments with test agent definitions
- * - Start real pi sessions in tmux panes
+ * - Start real pi sessions in multiplexer panes
  * - Poll for file creation and screen output
  * - Clean up panes and temp files after tests
  */
@@ -23,7 +23,7 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import {
-  isMuxAvailable,
+  getMuxBackend,
   createSurface,
   createSurfaceSplit,
   sendCommand,
@@ -32,9 +32,10 @@ import {
   readScreenAsync,
   closeSurface,
   shellEscape,
-} from "../../pi-extension/subagents/tmux.ts";
+  type MuxBackend,
+} from "../../pi-extension/subagents/mux.ts";
 
-// Re-export tmux primitives for tests
+// Re-export multiplexer primitives for tests
 export {
   createSurface,
   createSurfaceSplit,
@@ -75,12 +76,29 @@ export const PI_TIMEOUT = Number(process.env.PI_TEST_TIMEOUT ?? "120000");
 
 // ── Backend detection ──
 
-/**
- * Detect whether tmux is available in the current environment.
- * Returns ["tmux"] or [].
- */
-export function getAvailableBackends(): string[] {
-  return isMuxAvailable() ? ["tmux"] : [];
+/** Detect which supported backends are available in the current runtime. */
+export function getAvailableBackends(): MuxBackend[] {
+  const backends: MuxBackend[] = [];
+  const original = process.env.PI_SUBAGENT_MUX;
+  const requested = original === "tmux" || original === "zellij" ? [original] : ["tmux", "zellij"];
+  for (const backend of requested as MuxBackend[]) {
+    process.env.PI_SUBAGENT_MUX = backend;
+    if (getMuxBackend() === backend) backends.push(backend);
+  }
+  if (original === undefined) delete process.env.PI_SUBAGENT_MUX;
+  else process.env.PI_SUBAGENT_MUX = original;
+  return backends;
+}
+
+export function setBackend(backend: MuxBackend): string | undefined {
+  const previous = process.env.PI_SUBAGENT_MUX;
+  process.env.PI_SUBAGENT_MUX = backend;
+  return previous;
+}
+
+export function restoreBackend(previous: string | undefined): void {
+  if (previous === undefined) delete process.env.PI_SUBAGENT_MUX;
+  else process.env.PI_SUBAGENT_MUX = previous;
 }
 
 export function focusSurface(surface: string): void {
@@ -110,7 +128,7 @@ export async function waitForFocusedSurface(
   }
 
   throw new Error(
-    `Timeout (${timeout}ms) waiting for focused tmux pane ${surface}; ` +
+    `Timeout (${timeout}ms) waiting for focused tmux surface ${surface}; ` +
       `current focus is ${getFocusedSurface() ?? "unknown"}`,
   );
 }

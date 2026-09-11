@@ -2,14 +2,15 @@
  * Integration tests for the full subagent lifecycle.
  *
  * These tests spawn REAL pi sessions with REAL LLM calls (haiku by default).
- * Each test creates a tmux pane, runs pi with a task that uses the subagent
- * tool, and verifies the outcome via marker files and screen output.
+ * Each test creates a multiplexer pane, runs pi with a task that uses the
+ * subagent tool, and verifies the outcome via marker files and screen output.
  *
  * Costs: ~$0.01-0.05 per test run (haiku).
  * Duration: ~30-90s per test.
  *
- * Run inside tmux:
+ * Run inside tmux or zellij:
  *   tmux new 'npm run test:integration'
+ *   zellij --session pi  # then run: npm run test:integration
  *
  * Configuration:
  *   PI_TEST_MODEL     — model for all pi sessions (default: anthropic/claude-haiku-4-5)
@@ -20,6 +21,8 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import {
   getAvailableBackends,
+  setBackend,
+  restoreBackend,
   createTestEnv,
   cleanupTestEnv,
   createTrackedSurface,
@@ -37,20 +40,23 @@ import {
 const backends = getAvailableBackends();
 
 if (backends.length === 0) {
-  console.log("⚠️  tmux is not available — skipping subagent lifecycle integration tests");
-  console.log("   Run inside tmux to enable these tests.");
+  console.log("No supported mux is available - skipping subagent lifecycle integration tests");
+  console.log("Run inside tmux or zellij to enable these tests.");
 }
 
 for (const backend of backends) {
   describe(`subagent-lifecycle [${backend}]`, { timeout: PI_TIMEOUT * 3 }, () => {
     let env: TestEnv;
+    let previousMux: string | undefined;
 
     before(() => {
+      previousMux = setBackend(backend);
       env = createTestEnv();
     });
 
     after(() => {
       cleanupTestEnv(env);
+      restoreBackend(previousMux);
     });
 
     // ── Basic spawn + completion ──
